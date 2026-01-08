@@ -13,7 +13,7 @@
         <module>useCases</module>
         <module>analysis</module>
     </modules>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT-GoDutch</version>
     <description>Microscopic Transportation Orchestrator</description>
     <inceptionYear>2015</inceptionYear>
 
