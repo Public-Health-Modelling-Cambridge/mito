@@ -3,7 +3,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
 
     <modelVersion>4.0.0</modelVersion>
-    <groupId>de.tum.bgu.msm.mito</groupId>
+    <groupId>uk.ac.cam.phm</groupId>
     <artifactId>mito-parent</artifactId>
     <packaging>pom</packaging>
     <name>mito-parent</name>
@@ -13,7 +13,7 @@
         <module>useCases</module>
         <module>analysis</module>
     </modules>
-    <version>master-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
     <description>Microscopic Transportation Orchestrator</description>
     <inceptionYear>2015</inceptionYear>
 
@@ -25,38 +25,27 @@
     </licenses>
 
     <scm>
-        <url>https://github.com/msmobility/mito</url>
-        <connection>scm:git:git://github.com/msmobility/mito.git</connection>
-        <developerConnection>scm:git:git@github.com:msmobility/mito.git</developerConnection>
+        <url>https://github.com/Public-Health-Modelling-Cambridge/mito</url>
+        <connection>scm:git:git://github.com/Public-Health-Modelling-Cambridge/mito.git</connection>
+        <developerConnection>scm:git:git@github.com:Public-Health-Modelling-Cambridge/mito.git</developerConnection>
     </scm>
 
     <distributionManagement>
-        <snapshotRepository>
-            <id>msm</id>
-            <url>https://maven.cloudsmith.io/msmobility/mito/</url>
-        </snapshotRepository>
-        <repository>
-            <id>msm-snapshots</id>
-            <url>https://maven.cloudsmith.io/msmobility/mito/</url>
-        </repository>
+         <repository>
+              <id>github</id>
+              <name>GitHub Packages</name>
+              <url>https://maven.pkg.github.com/Public-Health-Modelling-Cambridge/mito</url>
+         </repository>
+         <snapshotRepository>
+              <id>github</id>
+              <url>https://maven.pkg.github.com/Public-Health-Modelling-Cambridge/mito</url>
+         </snapshotRepository>
     </distributionManagement>
 
     <repositories>
         <repository>
             <id>msm</id>
             <url>https://dl.cloudsmith.io/public/msmobility/msm/maven/</url>
-            <releases>
-                <enabled>true</enabled>
-                <updatePolicy>always</updatePolicy>
-            </releases>
-            <snapshots>
-                <enabled>true</enabled>
-                <updatePolicy>always</updatePolicy>
-            </snapshots>
-        </repository>
-        <repository>
-            <id>mito</id>
-            <url>https://dl.cloudsmith.io/public/msmobility/mito/maven/</url>
             <releases>
                 <enabled>true</enabled>
                 <updatePolicy>always</updatePolicy>
