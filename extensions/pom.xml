@@ -10,6 +10,8 @@
     </parent>
 
     <artifactId>extensions</artifactId>
+    <version>1.0.0-GoDutch-SNAPSHOT</version>
+         
     <packaging>pom</packaging>
     <modules>
         <module>moped2mito</module>
