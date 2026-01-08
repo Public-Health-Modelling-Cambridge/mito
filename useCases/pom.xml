@@ -10,6 +10,7 @@
     </parent>
 
     <artifactId>useCases</artifactId>
+    <version>1.0.0-GoDutch-SNAPSHOT</version>
     <packaging>pom</packaging>
     <modules>
         <module>manchester</module>
