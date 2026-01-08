@@ -12,7 +12,6 @@
     <artifactId>useCases</artifactId>
     <packaging>pom</packaging>
     <modules>
-        <module>munich</module>
         <module>manchester</module>
         <module>kagawa</module>
         <module>germany</module>
