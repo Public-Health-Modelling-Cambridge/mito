@@ -10,7 +10,7 @@
     </parent>
 
     <artifactId>mitoCore</artifactId>
-    <version>1.0.1-GoDutch-SNAPSHOT</version>
+    <version>1.0.0-GoDutch-SNAPSHOT</version>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
