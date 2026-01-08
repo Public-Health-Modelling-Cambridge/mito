@@ -4,9 +4,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>de.tum.bgu.msm.mito</groupId>
+        <groupId>uk.ac.cam.phm</groupId>
         <artifactId>mito-parent</artifactId>
-        <version>master-SNAPSHOT</version>
+        <version>1.0.0-GoDutch-SNAPSHOT</version>
     </parent>
 
     <artifactId>useCases</artifactId>
