@@ -32,12 +32,12 @@
 
     <distributionManagement>
         <snapshotRepository>
-            <id>msm</id>
-            <url>https://maven.cloudsmith.io/msmobility/mito/</url>
+            <id>phm-phm-mito</id>
+            <url>https://maven.cloudsmith.io/phm/phm-mito/</url>
         </snapshotRepository>
         <repository>
-            <id>msm-snapshots</id>
-            <url>https://maven.cloudsmith.io/msmobility/mito/</url>
+            <id>phm-phm-mito</id>
+            <url>https://maven.cloudsmith.io/phm/phm-mito/</url>
         </repository>
     </distributionManagement>
 
