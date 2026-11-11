@@ -8,6 +8,7 @@ import de.tum.bgu.msm.modules.ModeSetChoice;
 import de.tum.bgu.msm.modules.Module;
 import de.tum.bgu.msm.modules.modeChoice.CalibratingModeChoiceCalculatorImpl;
 import de.tum.bgu.msm.modules.modeChoice.ModeChoice;
+import de.tum.bgu.msm.modules.modeChoice.ModeChoiceCalculator;
 import de.tum.bgu.msm.modules.modeChoice.ModeChoiceCalibrationData;
 import de.tum.bgu.msm.modules.plansConverter.externalFlows.LongDistanceTraffic;
 import de.tum.bgu.msm.modules.scaling.TripScaling;
@@ -20,9 +21,13 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import uk.cam.mrc.phm.calculators.*;
 import uk.cam.mrc.phm.io.SummarizeData7daysMCR;
+import uk.cam.mrc.phm.modules.WeatherModeShifts;
+import uk.cam.mrc.phm.modules.WeatherOfDay;
+import uk.cam.mrc.phm.modules.WeatherTripAdjustment;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static de.tum.bgu.msm.data.Purpose.RRT;
@@ -145,10 +150,24 @@ public final class TravelDemandGeneratorMCR {
             //Override the calculator for RRT, because the categorisePerson is different
             ((TripDistribution) distributionDiscretionary).registerDestinationUtilityCalculator(RRT, new DestinationUtilityCalculatorRrtMCR(RRT));
 
+            // Weather channel 2 (mode shift): add the weather of the trip's day to the calibrated utilities.
+            final WeatherModeShifts weatherModeShifts;
+            if (Resources.instance.getBoolean(WeatherModeShifts.RUN, false)) {
+                if (Resources.instance.getBoolean(Properties.RUN_CALIBRATION_MC, false)) {
+                    throw new RuntimeException(WeatherModeShifts.RUN + " and mode choice calibration are both on."
+                            + " Calibrate on a reference day (no weather), otherwise the constants absorb the weather effect.");
+                }
+                weatherModeShifts = new WeatherModeShifts(new WeatherOfDay());
+            } else {
+                weatherModeShifts = null;
+            }
+            Function<ModeChoiceCalculator, ModeChoiceCalculator> withWeather = calculator ->
+                    weatherModeShifts == null ? calculator : new WeatherModeChoiceCalculatorMCR(calculator, weatherModeShifts);
+
             modeChoice = new ModeChoice(dataSet, purposes);
-            purposes.forEach(purpose -> ((ModeChoice) modeChoice).registerModeChoiceCalculator(purpose, new CalibratingModeChoiceCalculatorImpl(new ModeChoiceCalculatorMCR(purpose, dataSet), dataSet.getModeChoiceCalibrationData())));
+            purposes.forEach(purpose -> ((ModeChoice) modeChoice).registerModeChoiceCalculator(purpose, withWeather.apply(new CalibratingModeChoiceCalculatorImpl(new ModeChoiceCalculatorMCR(purpose, dataSet), dataSet.getModeChoiceCalibrationData()))));
             //Override the calculator for RRT
-            ((ModeChoice) modeChoice).registerModeChoiceCalculator(RRT, new CalibratingModeChoiceCalculatorImpl(new ModeChoiceCalculatorRrtMCR(dataSet), dataSet.getModeChoiceCalibrationData()));
+            ((ModeChoice) modeChoice).registerModeChoiceCalculator(RRT, withWeather.apply(new CalibratingModeChoiceCalculatorImpl(new ModeChoiceCalculatorRrtMCR(dataSet), dataSet.getModeChoiceCalibrationData())));
 
             dayOfWeekChoice = new DayOfWeekChoice(dataSet, purposes);
 
@@ -283,9 +302,23 @@ public final class TravelDemandGeneratorMCR {
 //        ((TravelTimeBudgetModule) travelTimeBudgetDiscretionary).adjustDiscretionaryPurposeBudgets();
 
 
+        // Day of week choice uses only the purpose and number of trips of each person, so it can
+        // run before distribution and mode choice. The weather acts on the day each trip is on.
+        logger.info("Running day of week choice");
+        dayOfWeekChoice.run();
+
         if(Resources.instance.getBoolean(Properties.RUN_MODESET,false)) {
             logger.info("Running Module: Mode set choice");
             modeSetChoice.run();
+        }
+
+        // Weather channel 1 (cancellation), by purpose and person group. After the mode set
+        // choice, so that one day's weather does not change the weekly mode set; before
+        // discretionary distribution and mode choice, so cancelled trips are not processed.
+        // Channel 2 (mode shift) is inside mode choice, see the Builder.
+        if (Resources.instance.getBoolean(WeatherTripAdjustment.RUN, false)) {
+            logger.info("Running weather adjustment of trip generation");
+            new WeatherTripAdjustment(dataSet, getListedPurposes(Resources.instance.getString(Properties.TRIP_PURPOSES)), new WeatherOfDay()).run();
         }
 
         logger.info("Running Module: Microscopic Trip Distribution");
@@ -328,9 +361,6 @@ public final class TravelDemandGeneratorMCR {
                 modeChoiceCalibrationData.close();
             }
         }
-
-        logger.info("Running day of week choice");
-        dayOfWeekChoice.run();
 
         logger.info("Running time of day choice");
         timeOfDayChoice.run();

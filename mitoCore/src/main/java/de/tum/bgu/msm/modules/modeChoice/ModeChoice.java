@@ -187,7 +187,7 @@ public class ModeChoice extends Module {
                     destinationId);
             final double travelDistanceNMT = dataSet.getTravelDistancesNMT().getTravelDistance(originId,
                     destinationId);
-            return modeChoiceCalculator.calculateUtilities(purpose, household, trip.getPerson(), origin, destination, travelTimes, travelDistanceAuto,
+            return modeChoiceCalculator.calculateUtilities(trip, purpose, household, trip.getPerson(), origin, destination, travelTimes, travelDistanceAuto,
                     travelDistanceNMT, dataSet.getPeakHour());
         }
 
