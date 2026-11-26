@@ -315,8 +315,12 @@ public final class TravelDemandGeneratorMCR {
         // Weather channel 1 (cancellation), by purpose and person group. After the mode set
         // choice, so that one day's weather does not change the weekly mode set; before
         // discretionary distribution and mode choice, so cancelled trips are not processed.
+        // With weather.tripgen.stage = afterModeChoice it runs after mode choice instead (below),
+        // so that the multiplier can depend on the chosen mode.
         // Channel 2 (mode shift) is inside mode choice, see the Builder.
-        if (Resources.instance.getBoolean(WeatherTripAdjustment.RUN, false)) {
+        final boolean weatherTripAdjustment = Resources.instance.getBoolean(WeatherTripAdjustment.RUN, false);
+        final boolean weatherAfterModeChoice = weatherTripAdjustment && WeatherTripAdjustment.runsAfterModeChoice();
+        if (weatherTripAdjustment && !weatherAfterModeChoice) {
             logger.info("Running weather adjustment of trip generation");
             new WeatherTripAdjustment(dataSet, getListedPurposes(Resources.instance.getString(Properties.TRIP_PURPOSES)), new WeatherOfDay()).run();
         }
@@ -360,6 +364,14 @@ public final class TravelDemandGeneratorMCR {
                 }
                 modeChoiceCalibrationData.close();
             }
+        }
+
+        // Weather channel 1 after mode choice: cancellation by purpose, person group and chosen mode.
+        // After the calibration loop (the calibration sees the trips before the weather), before
+        // time of day choice, so that duplicated trips still get their own departure time.
+        if (weatherAfterModeChoice) {
+            logger.info("Running weather adjustment of trips after mode choice");
+            new WeatherTripAdjustment(dataSet, getListedPurposes(Resources.instance.getString(Properties.TRIP_PURPOSES)), new WeatherOfDay()).run();
         }
 
         logger.info("Running time of day choice");

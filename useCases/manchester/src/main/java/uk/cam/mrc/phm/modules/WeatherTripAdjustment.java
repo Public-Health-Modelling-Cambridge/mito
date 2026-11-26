@@ -18,10 +18,21 @@ import java.util.*;
  * Weather channel 1 of 2: trip cancellation (and, for some groups, extra trips).
  *
  * MITO generates trips per person and week. The weather acts on single days, so this module
- * runs right after the day-of-week choice, once every trip has its day, and before trip
- * distribution and mode choice. For every trip it computes a trip-rate multiplier from the
- * weather of the trip's day, the trip purpose and the traveller (gender, age group, occupation,
- * household car ownership, urban/rural home, weekday/weekend), and then
+ * runs once every trip has its day, at one of two stages ({@code weather.tripgen.stage}):
+ * <ul>
+ *     <li>{@code beforeDistribution} (default): right after the day-of-week and mode set choice,
+ *     before trip distribution and mode choice. The multiplier depends on purpose and traveller
+ *     only.</li>
+ *     <li>{@code afterModeChoice}: after mode choice (and its calibration loop), before time of
+ *     day choice. The multiplier can also depend on the chosen mode, through rows with
+ *     {@code mode} = walk / bike / pt / car. In the NTS, weather cancels trips mostly through
+ *     people who usually walk or cycle; MITO does not know who they are before mode choice, but
+ *     the chosen mode carries that information (siloPhm useCases/manchester/
+ *     MITO_WEATHER_CANCELLATION_BY_MODE.md).</li>
+ * </ul>
+ * For every trip it computes a trip-rate multiplier from the weather of the trip's day, the
+ * trip purpose, the traveller (gender, age group, occupation, household car ownership,
+ * urban/rural home, weekday/weekend) and, after mode choice, the chosen mode, and then
  * <ul>
  *     <li>keeps the trip with probability {@code multiplier} if the multiplier is below 1
  *     (binomial thinning, equivalent to scaling the mean of the Poisson / negative binomial
@@ -31,13 +42,13 @@ import java.util.*;
  * Because the coefficients come from a daily model with person fixed effects, thinning the
  * trips of one day reproduces the daily model exactly: no weekly weather aggregate is needed.
  *
- * The multipliers are by purpose, not by mode. The change in the mode mix is the second
- * channel, handled in mode choice by
- * {@link uk.cam.mrc.phm.calculators.WeatherModeChoiceCalculatorMCR}. Trips by mode = all trips
- * x mode share, so the two channels together reproduce the by-mode response of the NTS without
- * counting it twice. The coefficient file must therefore only have {@code mode = all} rows
- * ({@code weatherTripGenCoefficients_purposeOnly.csv}); a file with mode-specific rows is
- * rejected.
+ * The change in the mode mix is the second channel, handled in mode choice by
+ * {@link uk.cam.mrc.phm.calculators.WeatherModeChoiceCalculatorMCR}. Before distribution the
+ * multipliers are by purpose, not by mode, so the coefficient file may only have
+ * {@code mode = all} rows ({@code weatherTripGenCoefficients_purposeOnly.csv}); mode rows are
+ * rejected at that stage. After mode choice, mode rows are allowed
+ * ({@code weatherTripGenCoefficients_byMode.csv}); the mode shifts must then be recalibrated,
+ * since part of the by-mode response comes from cancellation.
  *
  * The multiplier is {@code exp(sum of applicable coefficients)}. Coefficients come from the
  * conditional fixed-effects Poisson models estimated on the National Travel Survey in the
@@ -49,13 +60,16 @@ import java.util.*;
  *     (hazard {@code temp});</li>
  *     <li>{@code slope}: a coefficient multiplied by a continuous severity (hazards
  *     {@code rain}, {@code cold}, {@code heat}, see {@link #severity}). The {@code base} row
- *     applies to everyone, the other rows to members of the named group.</li>
+ *     applies to everyone, the other rows to members of the named group. A row with a mode
+ *     other than {@code all} applies only to trips of that mode group (walk; bike = bicycle;
+ *     pt = pt, bus, train, tramOrMetro; car = autoDriver, autoPassenger).</li>
  * </ul>
  *
  * Properties (MITO properties file), plus the weather of each day, see {@link WeatherOfDay}:
  * <pre>
  * weather.tripgen.run          = true
  * weather.tripgen.coefficients = input/mito/tripGeneration/weatherTripGenCoefficients_purposeOnly.csv
+ * weather.tripgen.stage        = beforeDistribution      # or afterModeChoice (with the byMode file)
  * </pre>
  */
 public final class WeatherTripAdjustment extends Module {
@@ -64,6 +78,9 @@ public final class WeatherTripAdjustment extends Module {
 
     public static final String RUN = "weather.tripgen.run";
     public static final String COEFFICIENTS = "weather.tripgen.coefficients";
+    public static final String STAGE = "weather.tripgen.stage";
+    public static final String STAGE_BEFORE_DISTRIBUTION = "beforeDistribution";
+    public static final String STAGE_AFTER_MODE_CHOICE = "afterModeChoice";
 
     private static final String KIND_BIN = "bin";
     private static final String KIND_SLOPE = "slope";
@@ -89,6 +106,15 @@ public final class WeatherTripAdjustment extends Module {
             BASE, FEMALE, AGE_0_15, AGE_16_29, AGE_50_64, AGE_65_PLUS, WEEKEND, NO_CAR, RURAL,
             RETIRED, NON_WORKING));
 
+    // Mode groups of the mode rows (after mode choice). Must match the estimation (NTS mode groups).
+    private static final String MODE_WALK = "walk";
+    private static final String MODE_BIKE = "bike";
+    private static final String MODE_PT = "pt";
+    private static final String MODE_CAR = "car";
+    private static final String MODE_OTHER = "other";   // no rows: only the mode = all rows apply
+    private static final Set<String> KNOWN_MODE_GROUPS = new HashSet<>(Arrays.asList(
+            MODE_WALK, MODE_BIKE, MODE_PT, MODE_CAR));
+
     /** Upper bound on a multiplier: a trip is duplicated at most once. */
     private static final double MAX_MULTIPLIER = 2.;
 
@@ -109,7 +135,7 @@ public final class WeatherTripAdjustment extends Module {
         }
     }
 
-    /** Slopes on one continuous severity, by modifier. */
+    /** Slopes on one continuous severity, by modifier and mode group ({@link #slopeKey}). */
     private static final class Slope {
         final double lower;
         final double upper;
@@ -133,10 +159,15 @@ public final class WeatherTripAdjustment extends Module {
     private final Map<String, Slope> slopeByHazard = new LinkedHashMap<>();
     private final EnumMap<Day, DayEffect> effectByDay = new EnumMap<>(Day.class);
     private final MitoTripFactory tripFactory = new MitoTripFactory7days();
+    /** True if this module runs after mode choice: mode rows allowed, multipliers by chosen mode. */
+    private final boolean afterModeChoice;
 
     public WeatherTripAdjustment(DataSet dataSet, List<Purpose> purposes, WeatherOfDay weather) {
         super(dataSet, purposes);
+        this.afterModeChoice = runsAfterModeChoice();
         readCoefficients(Resources.instance.getRelativePath(COEFFICIENTS));
+        logger.info("Weather trip adjustment stage: "
+                + (afterModeChoice ? STAGE_AFTER_MODE_CHOICE : STAGE_BEFORE_DISTRIBUTION));
         for (Day day : Day.values()) {
             if (!weather.hasWeather(day)) {
                 continue;
@@ -169,7 +200,9 @@ public final class WeatherTripAdjustment extends Module {
         trips.sort(Comparator.comparingInt(MitoTrip::getId));
         int nextTripId = trips.isEmpty() ? 1 : trips.get(trips.size() - 1).getId() + 1;
 
+        // counts: [0] trips before, [1] removed, [2] added
         EnumMap<Day, EnumMap<Purpose, int[]>> counts = new EnumMap<>(Day.class);
+        EnumMap<Day, Map<String, int[]>> countsByMode = new EnumMap<>(Day.class);
 
         for (MitoTrip trip : trips) {
             double draw = random.nextDouble();
@@ -181,27 +214,86 @@ public final class WeatherTripAdjustment extends Module {
                 continue;
             }
             Purpose purpose = trip.getTripPurpose();
-            double multiplier = getMultiplier(purpose, trip.getPerson(), day);
+            String modeGroup = null;
+            if (afterModeChoice) {
+                if (trip.getTripMode() == null) {
+                    throw new RuntimeException("Trip " + trip.getId() + " has no mode, but " + STAGE + " = "
+                            + STAGE_AFTER_MODE_CHOICE + ": the weather adjustment must run after mode choice.");
+                }
+                modeGroup = modeGroup(trip.getTripMode());
+            }
+            double multiplier = getMultiplier(purpose, trip.getPerson(), day, modeGroup);
 
-            // counts: [0] trips before, [1] removed, [2] added
             int[] count = counts.computeIfAbsent(day, d -> new EnumMap<>(Purpose.class))
                     .computeIfAbsent(purpose, p -> new int[3]);
+            int[] modeCount = modeGroup == null ? new int[3]
+                    : countsByMode.computeIfAbsent(day, d -> new TreeMap<>()).computeIfAbsent(modeGroup, m -> new int[3]);
             count[0]++;
+            modeCount[0]++;
             if (multiplier < 1.) {
                 if (draw >= multiplier) {
                     removeTrip(trip);
                     count[1]++;
+                    modeCount[1]++;
                 }
             } else if (draw < multiplier - 1.) {
                 duplicateTrip((MitoTrip7days) trip, nextTripId++);
                 count[2]++;
+                modeCount[2]++;
             }
         }
-        logSummary(counts);
+        logSummary(counts, countsByMode);
     }
 
-    /** Trip-rate multiplier of one trip. 1 if no weather is given for the day. */
+    /** True if {@value #STAGE} asks for the adjustment after mode choice. Fails on unknown values. */
+    public static boolean runsAfterModeChoice() {
+        String value = Resources.instance.getString(STAGE);
+        String stage = value == null ? STAGE_BEFORE_DISTRIBUTION : value.trim();
+        if (STAGE_AFTER_MODE_CHOICE.equals(stage)) {
+            return true;
+        }
+        if (STAGE_BEFORE_DISTRIBUTION.equals(stage)) {
+            return false;
+        }
+        throw new RuntimeException("Unknown " + STAGE + " '" + stage + "' (use " + STAGE_BEFORE_DISTRIBUTION
+                + " or " + STAGE_AFTER_MODE_CHOICE + ")");
+    }
+
+    /** Mode group of the coefficient file's mode rows; {@code other} for modes without rows. */
+    static String modeGroup(Mode mode) {
+        switch (mode) {
+            case walk:
+                return MODE_WALK;
+            case bicycle:
+                return MODE_BIKE;
+            case pt:
+            case bus:
+            case train:
+            case tramOrMetro:
+                return MODE_PT;
+            case autoDriver:
+            case autoPassenger:
+                return MODE_CAR;
+            default:
+                return MODE_OTHER;
+        }
+    }
+
+    private static String slopeKey(String modifier, String mode) {
+        return modifier + "|" + mode;
+    }
+
+    /** Trip-rate multiplier of one trip, ignoring the mode rows. 1 if no weather is given for the day. */
     public double getMultiplier(Purpose purpose, MitoPerson person, Day day) {
+        return getMultiplier(purpose, person, day, null);
+    }
+
+    /**
+     * Trip-rate multiplier of one trip. 1 if no weather is given for the day. {@code modeGroup}
+     * (walk / bike / pt / car / other, or null before mode choice) selects the mode rows that
+     * apply on top of the {@code mode = all} rows.
+     */
+    public double getMultiplier(Purpose purpose, MitoPerson person, Day day, String modeGroup) {
         DayEffect effect = effectByDay.get(day);
         if (effect == null) {
             return 1.;
@@ -245,9 +337,15 @@ public final class WeatherTripAdjustment extends Module {
             Slope slope = slopeByHazard.get(entry.getKey());
             double coefficient = 0.;
             for (String modifier : modifiers) {
-                EnumMap<Purpose, Double> byPurpose = slope.coefficientsByModifier.get(modifier);
+                EnumMap<Purpose, Double> byPurpose = slope.coefficientsByModifier.get(slopeKey(modifier, MODE_ALL));
                 if (byPurpose != null) {
                     coefficient += byPurpose.getOrDefault(purpose, 0.);
+                }
+                if (modeGroup != null) {
+                    EnumMap<Purpose, Double> byMode = slope.coefficientsByModifier.get(slopeKey(modifier, modeGroup));
+                    if (byMode != null) {
+                        coefficient += byMode.getOrDefault(purpose, 0.);
+                    }
                 }
             }
             logMultiplier += entry.getValue() * coefficient;
@@ -303,7 +401,10 @@ public final class WeatherTripAdjustment extends Module {
         dataSet.removeTrip(trip.getId());
     }
 
-    /** Copies a trip before distribution and mode choice: only origin, destination (if already set) and day. */
+    /**
+     * Copies a trip: origin, destination (if already set) and day; after mode choice also the
+     * mode. Time of day is chosen later for both stages.
+     */
     private void duplicateTrip(MitoTrip7days trip, int newTripId) {
         MitoTrip7days copy = (MitoTrip7days) tripFactory.createTrip(newTripId, trip.getTripPurpose());
         MitoPerson person = trip.getPerson();
@@ -311,12 +412,24 @@ public final class WeatherTripAdjustment extends Module {
         copy.setTripOrigin(trip.getTripOrigin());
         copy.setTripDestination(trip.getTripDestination());
         copy.setDepartureDay(trip.getDepartureDay());
+        if (afterModeChoice) {
+            copy.setTripMode(trip.getTripMode());
+        }
         person.addTrip(copy);
         person.getHousehold().addTripsForPurpose(trip.getTripPurpose(), copy);
         dataSet.addTrip(copy);
     }
 
-    private void logSummary(EnumMap<Day, EnumMap<Purpose, int[]>> counts) {
+    private void logSummary(EnumMap<Day, EnumMap<Purpose, int[]>> counts, EnumMap<Day, Map<String, int[]>> countsByMode) {
+        for (Map.Entry<Day, Map<String, int[]>> dayEntry : countsByMode.entrySet()) {
+            StringBuilder byMode = new StringBuilder();
+            for (Map.Entry<String, int[]> entry : dayEntry.getValue().entrySet()) {
+                int[] count = entry.getValue();
+                byMode.append(String.format(Locale.ROOT, " %s %+.1f%%", entry.getKey(),
+                        100. * (count[2] - count[1]) / count[0]));
+            }
+            logger.info("Weather adjustment " + dayEntry.getKey() + " by mode:" + byMode);
+        }
         for (Map.Entry<Day, EnumMap<Purpose, int[]>> dayEntry : counts.entrySet()) {
             int before = 0;
             int after = 0;
@@ -367,10 +480,22 @@ public final class WeatherTripAdjustment extends Module {
                 String modifier = record[modifierIndex];
                 double lower = Double.parseDouble(record[lowerIndex]);
                 double upper = Double.parseDouble(record[upperIndex]);
-                if (!MODE_ALL.equals(record[modeIndex])) {
-                    throw new RuntimeException("Row with mode '" + record[modeIndex] + "' in " + path
-                            + ". Trip cancellation is by purpose only (the mode shift is in mode choice):"
-                            + " use the purpose-only file, weatherTripGenCoefficients_purposeOnly.csv.");
+                String mode = record[modeIndex].trim();
+                if (!MODE_ALL.equals(mode)) {
+                    if (!afterModeChoice) {
+                        throw new RuntimeException("Row with mode '" + mode + "' in " + path
+                                + ". Before distribution, trip cancellation is by purpose only (the mode shift is in"
+                                + " mode choice): use the purpose-only file, weatherTripGenCoefficients_purposeOnly.csv,"
+                                + " or set " + STAGE + " = " + STAGE_AFTER_MODE_CHOICE + ".");
+                    }
+                    if (!KNOWN_MODE_GROUPS.contains(mode)) {
+                        throw new RuntimeException("Unknown mode '" + mode + "' in " + path + " (use all, "
+                                + String.join(", ", new TreeSet<>(KNOWN_MODE_GROUPS)) + ").");
+                    }
+                    if (!KIND_SLOPE.equals(kind)) {
+                        throw new RuntimeException("Mode-specific rows must be slopes (row kind '" + kind
+                                + "', mode '" + mode + "') in " + path);
+                    }
                 }
                 if (!KNOWN_MODIFIERS.contains(modifier)) {
                     throw new RuntimeException("Unknown modifier '" + modifier + "' in " + path
@@ -388,8 +513,12 @@ public final class WeatherTripAdjustment extends Module {
                     steps.add(new Step(hazard, record[binIndex], lower, upper, byPurpose));
                 } else if (KIND_SLOPE.equals(kind)) {
                     severity(hazard, 0., lower, upper);   // fails early on an unknown severity
-                    slopeByHazard.computeIfAbsent(hazard, h -> new Slope(lower, upper))
-                            .coefficientsByModifier.put(modifier, byPurpose);
+                    EnumMap<Purpose, Double> previous = slopeByHazard.computeIfAbsent(hazard, h -> new Slope(lower, upper))
+                            .coefficientsByModifier.put(slopeKey(modifier, mode), byPurpose);
+                    if (previous != null) {
+                        throw new RuntimeException("Duplicate slope row (hazard '" + hazard + "', modifier '"
+                                + modifier + "', mode '" + mode + "') in " + path);
+                    }
                 } else {
                     throw new RuntimeException("Unknown row kind '" + kind + "' in " + path);
                 }
